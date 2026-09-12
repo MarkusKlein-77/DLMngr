@@ -88,9 +88,14 @@ public partial class MainWindow : Window
             try
             {
                 var text = System.Windows.Clipboard.GetText();
-                if (!string.IsNullOrWhiteSpace(text) && Uri.TryCreate(text.Trim(), UriKind.Absolute, out var uri))
+                if (string.IsNullOrWhiteSpace(text))
                 {
-                    ClipboardUrlBox.Text = text.Trim();
+                    return;
+                }
+
+                if (UrlNormalizer.TryNormalizeUrl(text, out var uri))
+                {
+                    ClipboardUrlBox.Text = uri!.ToString();
                     if (ShouldProcessDomain(uri.Host))
                     {
                         Log($"Eligible clipboard URL detected: {uri.Host}");
@@ -113,9 +118,7 @@ public partial class MainWindow : Window
             return false;
         }
 
-        return _settings.AllowedDomains.Any(rule =>
-            host.Equals(rule, StringComparison.OrdinalIgnoreCase) ||
-            host.EndsWith($".{rule}", StringComparison.OrdinalIgnoreCase));
+        return _settings.AllowedDomains.Any(rule => UrlNormalizer.MatchesDomain(host, rule));
     }
 
     private void ProcessUrl(string? url)
@@ -126,21 +129,21 @@ public partial class MainWindow : Window
             return;
         }
 
-        var trimmed = url.Trim();
-        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) || !uri.Scheme.StartsWith("http"))
+        if (!UrlNormalizer.TryNormalizeUrl(url, out var uri))
         {
             Log("Clipboard content is not a supported HTTP/HTTPS URL.");
             return;
         }
 
-        if (!ShouldProcessDomain(uri.Host))
+        if (!ShouldProcessDomain(uri!.Host))
         {
             Log($"Domain is not allowed: {uri.Host}");
             return;
         }
 
-        Log($"Queued for processing: {trimmed}");
-        _ = _queueManager?.EnqueueAsync(trimmed);
+        var normalizedUrl = uri.ToString();
+        Log($"Queued for processing: {normalizedUrl}");
+        _ = _queueManager?.EnqueueAsync(normalizedUrl);
     }
 
     private void Log(string message)
