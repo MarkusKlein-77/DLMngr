@@ -22,6 +22,33 @@ Two new constraints make this a more specialized project:
 
 These are important because many generic downloaders work well only on a broad set of common video pages. For niche sites, the app must be designed to inspect the page deeply, capture the actual network media traffic, and accept that some domains will need custom extraction logic or user-configurable patterns.
 
+## Actual findings from this implementation session
+
+The first major lesson is that a page URL is not the same as the media URL. On the targeted niche site, the clipboard URL is a page like:
+
+- https://gayprohub.com/video/...
+
+but the actual stream appears only after the browser reaches the real player flow. This requires at least the following sequence:
+
+1. open the page
+2. accept the age gate if present
+3. click the play trigger
+4. wait for the browser to request the player / token endpoint
+5. capture the iframe or manifest URL created after playback begins
+6. choose the final HLS/DASH manifest such as a playlist.m3u8 URL
+
+A raw HTML scan is insufficient for this class of site. The live browser investigation showed the actual request chain on the target page:
+
+- /api/play-snippet/...
+- https://play.streamedcast.com/player.js
+- https://play.streamedcast.com/api/play/t/...
+- https://iframe.mediadelivery.net/...
+- https://vz-.../playlist.m3u8
+
+This proves that the app must inspect the browser network after play starts, not just parse the initial HTML. The right design is therefore: browser-based media detection after play, with fallback scanning only when direct URLs are visible.
+
+A second practical lesson is that clipboard monitoring must be deduplicated. Re-polling the clipboard every few hundred milliseconds without checking whether the URL changed leads to a flood of duplicate log lines. The app should only log or process a new URL when the normalized clipboard value actually changes.
+
 ## Recommended architecture
 
 ### 1. Windows desktop shell

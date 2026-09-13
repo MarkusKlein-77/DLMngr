@@ -17,6 +17,7 @@ public partial class MainWindow : Window
 
     private AppSettings _settings = new();
     private DownloadQueueManager? _queueManager;
+    private string? _lastClipboardUrl;
 
     public MainWindow()
     {
@@ -63,12 +64,12 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ProcessClipboardButton_Click(object sender, RoutedEventArgs e)
+    private async void ProcessClipboardButton_Click(object sender, RoutedEventArgs e)
     {
         try
         {
             var text = System.Windows.Clipboard.GetText();
-            ProcessUrl(text);
+            await ProcessUrlAsync(text);
         }
         catch (Exception ex)
         {
@@ -90,16 +91,27 @@ public partial class MainWindow : Window
                 var text = System.Windows.Clipboard.GetText();
                 if (string.IsNullOrWhiteSpace(text))
                 {
+                    _lastClipboardUrl = null;
                     return;
                 }
 
-                if (UrlNormalizer.TryNormalizeUrl(text, out var uri))
+                if (!UrlNormalizer.TryNormalizeUrl(text, out var uri))
                 {
-                    ClipboardUrlBox.Text = uri!.ToString();
-                    if (ShouldProcessDomain(uri.Host))
-                    {
-                        Log($"Eligible clipboard URL detected: {uri.Host}");
-                    }
+                    return;
+                }
+
+                var normalizedUrl = uri!.ToString();
+                if (string.Equals(_lastClipboardUrl, normalizedUrl, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                _lastClipboardUrl = normalizedUrl;
+                ClipboardUrlBox.Text = normalizedUrl;
+
+                if (ShouldProcessDomain(uri.Host))
+                {
+                    Log($"Eligible clipboard URL detected: {uri.Host}");
                 }
             }
             catch
@@ -121,7 +133,7 @@ public partial class MainWindow : Window
         return _settings.AllowedDomains.Any(rule => UrlNormalizer.MatchesDomain(host, rule));
     }
 
-    private void ProcessUrl(string? url)
+    private async Task ProcessUrlAsync(string? url)
     {
         if (string.IsNullOrWhiteSpace(url))
         {
@@ -141,9 +153,33 @@ public partial class MainWindow : Window
             return;
         }
 
-        var normalizedUrl = uri.ToString();
-        Log($"Queued for processing: {normalizedUrl}");
-        _ = _queueManager?.EnqueueAsync(normalizedUrl);
+        var candidateUrl = uri.ToString();
+        if (!StreamUrlDetector.IsMediaUrl(uri))
+        {
+            Log($"Page URL detected; inspecting page and browser network: {candidateUrl}");
+
+            var detected = await PlaywrightMediaInspector.DetectMediaUrlAsync(uri);
+            if (detected is null)
+            {
+                detected = await StreamUrlDetector.DetectBestUrlAsync(uri, _settings.AllowedDomains);
+            }
+
+            if (detected is null)
+            {
+                Log($"No HLS/DASH/media stream found in {candidateUrl}.");
+                return;
+            }
+
+            candidateUrl = detected.ToString();
+            Log($"Detected media stream: {candidateUrl}");
+        }
+        else
+        {
+            Log($"Direct media URL detected: {candidateUrl}");
+        }
+
+        Log($"Queued for processing: {candidateUrl}");
+        _ = _queueManager?.EnqueueAsync(candidateUrl);
     }
 
     private void Log(string message)
